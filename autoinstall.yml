@@ -1,7 +1,6 @@
 #cloud-config
 autoinstall:
-  refresh-installer:
-    update: false
+  version: 1
     
   source:
     id: ubuntu-desktop
