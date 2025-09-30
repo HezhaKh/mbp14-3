@@ -112,4 +112,5 @@ autoinstall:
         # point the generic name at the Apple file
         ln -sf "$(basename "$APPLE")" "$GENERIC"
         # rebuild initramfs so the firmware is present on first boot
-        update-initramfs -u'
+        update-initramfs -u
+        '
