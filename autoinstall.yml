@@ -1,144 +1,103 @@
 #cloud-config
 autoinstall:
   version: 1
-    
-  source:
-    id: ubuntu-desktop
-
-  locale: en_CA.UTF-8
+  identity:
+    hostname: ubuntu-mbp
+    username: hkh
+    password: "$6$rounds=4096$changeme$replace_this_with_encrypted_hash"
+  locale: en_US.UTF-8
   keyboard:
     layout: us
-  timezone: America/Toronto
-
-  identity:
-    hostname: m143
-    username: hkh
-    # REPLACE with your own SHA-512 hash before using!
-    # e.g. python3 - <<'PY' ; import crypt,getpass ; print(crypt.crypt(getpass.getpass(), crypt.mksalt(crypt.METHOD_SHA512))) ; PY
-    password: "$6$REPLACE_WITH_YOUR_SHA512_HASH"
-
-  ssh:
-    install-server: true
-    allow-pw: true
-
+    variant: ''
+  timezone: UTC
   apt:
     primary:
       - arches: [amd64]
-        uri: http://ca.archive.ubuntu.com/ubuntu
-    security:
-      - arches: [amd64]
-        uri: http://security.ubuntu.com/ubuntu/
+        uri: http://archive.ubuntu.com/ubuntu
+  ssh:
+    install-server: true
+    authorized-keys: []
+    allow-pw: true
+
+  storage:
+    layout:
+      name: existing
+    config:
+      - id: disk0
+        type: disk
+        match:
+          path: /dev/nvme0n1
+        ptable: gpt
+        preserve: true
+
+      # EFI (nvme0n1p1) — reuse
+      - id: part-esp
+        type: partition
+        device: disk0
+        number: 1
+        preserve: true
+        grub_device: true
+      - id: fs-esp
+        type: format
+        fstype: fat32
+        volume: part-esp
+        preserve: true
+      - id: mnt-esp
+        type: mount
+        device: fs-esp
+        path: /boot/efi
+
+      # macOS (nvme0n1p2) untouched — no entry
+
+      # swap (nvme0n1p3) — reuse
+      - id: part-swap
+        type: partition
+        device: disk0
+        number: 3
+        preserve: true
+      - id: fs-swap
+        type: format
+        fstype: swap
+        volume: part-swap
+        preserve: true
+      - id: mnt-swap
+        type: mount
+        device: fs-swap
+        path: none
+
+      # root (nvme0n1p4) — reformat to Btrfs
+      - id: part-root
+        type: partition
+        device: disk0
+        number: 4
+        wipe: superblock
+      - id: fs-root
+        type: format
+        fstype: btrfs
+        volume: part-root
+        label: root
+      - id: mnt-root
+        type: mount
+        device: fs-root
+        path: /
+        options: [noatime,ssd,compress=zstd]
 
   packages:
+    - linux-generic-hwe-24.04
+    - btrfs-progs
     - build-essential
     - dkms
-    - linux-headers-generic
-    - linux-source
     - git
-    - btrfs-progs
     - curl
     - wget
-    - ca-certificates
-    - software-properties-common
-    - network-manager
     - pipewire-audio
+    - pipewire-pulse
     - wireplumber
-    - alsa-utils
-    - alsa-ucm-conf
-    - libasound2t64
-    - linux-firmware
-    - fwupd
-    - openssh-server
-
-  drivers:
-    install: true
-
-storage:
-  version: 1
-  config:
-    # --- / (reformat p4 as btrfs) ---
-    - id: rootfs_format
-      type: format
-      volume: /dev/nvme0n1p4
-      fstype: btrfs
-      label: ubuntu-root
-      preserve: false     # <-- this is what makes it reformat p4
-      # optional, but helpful when reformatting existing btrfs
-      extra_options: [ "-f" ]
-
-    - id: rootfs_mount
-      type: mount
-      device: rootfs_format
-      path: /
-      # optional: btrfs mount opts; you can trim this if you prefer defaults
-      options: [ "defaults", "ssd", "noatime", "compress=zstd:3" ]
-
-    # --- /boot/efi (keep p1) ---
-    - id: efi_format
-      type: format
-      volume: /dev/nvme0n1p1
-      fstype: fat32
-      preserve: true      # keep existing ESP content (recommended)
-
-    - id: efi_mount
-      type: mount
-      device: efi_format
-      path: /boot/efi
-
-    # --- swap (keep p3) ---
-    - id: swap_format
-      type: format
-      volume: /dev/nvme0n1p3
-      fstype: swap
-      preserve: true
-
-    - id: swap_mount
-      type: mount
-      device: swap_format
-      path: none
-
-  late-commands:
-    - curtin in-target -- bash -euxc 'printf "KVER=\\"%s\\"\\n" "" > /etc/default/mbp-mainline'
-
-    - curtin in-target -- bash -euxc '
-        apt-get update;
-        install -d -m 0755 /lib/firmware/brcm;
-        curl -fsSL -o "/lib/firmware/brcm/brcmfmac43602-pcie.Apple Inc.-MacBookPro14,3.txt" "https://bugzilla.kernel.org/attachment.cgi?id=290569" || true;
-        ln -sfn "brcmfmac43602-pcie.Apple Inc.-MacBookPro14,3.txt" /lib/firmware/brcm/brcmfmac43602-pcie.txt || true;
-
-        printf "%s\n" "options snd-intel-dspcfg dsp_driver=1" > /etc/modprobe.d/99-intel-dsp.conf;
-        printf "%s\n" \
-          "blacklist snd_soc_avs" \
-          "blacklist snd_sof_pci_intel_skl" \
-          "blacklist snd_sof_intel_hda_common" \
-          "blacklist snd_sof_pci" \
-          "blacklist snd_sof" > /etc/modprobe.d/10-disable-sof-avs.conf;
-        printf "%s\n" "options snd_hda_intel enable_msi=1 power_save=0 dmic_detect=0 position_fix=2" > /etc/modprobe.d/99-hda.conf;
-
-        cd /root;
-        rm -rf snd_hda_macbookpro;
-        git clone https://github.com/davidjo/snd_hda_macbookpro;
-        cd snd_hda_macbookpro;
-        ./install.cirrus.driver.sh || true;
-
-        echo -e "\n# applespi\napplespi\nspi_pxa2xx_platform\nintel_lpss_pci" >> /etc/initramfs-tools/modules;
-        rm -rf /usr/src/applespi-0.1;
-        git clone https://github.com/roadrunner2/macbook12-spi-driver.git /usr/src/applespi-0.1;
-        dkms install -m applespi -v 0.1 || true;
-      '
-
-    - curtin in-target -- bash -euxc '
-        . /etc/default/mbp-mainline || true;
-        if [ -n "${KVER:-}" ]; then
-          add-apt-repository -y ppa:cappelikan/ppa || true;
-          apt-get update || true;
-          apt-get install -y mainline || true;
-          mainline install --yes --install-version "$KVER" || mainline install --yes --install-latest || true;
-        fi
-      '
-
-    - curtin in-target -- update-initramfs -u
 
   user-data:
-    package_update: true
-    package_upgrade: false
+    disable_root: false
+    package_upgrade: true
+
+  late-commands:
+    - curtin in-target -- apt-get update
+    - curtin in-target -- apt-get dist-upgrade -y
