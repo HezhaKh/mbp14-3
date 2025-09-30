@@ -53,65 +53,49 @@ autoinstall:
   drivers:
     install: true
 
-  storage:
-    version: 1
-    config:
-      - id: disk-nvme
-        type: disk
-        match: { path: /dev/nvme0n1 }
-        ptable: gpt
-        grub_device: true
-        preserve: true
+storage:
+  version: 1
+  config:
+    # --- / (reformat p4 as btrfs) ---
+    - id: rootfs_format
+      type: format
+      volume: /dev/nvme0n1p4
+      fstype: btrfs
+      label: ubuntu-root
+      preserve: false     # <-- this is what makes it reformat p4
+      # optional, but helpful when reformatting existing btrfs
+      extra_options: [ "-f" ]
 
-      - id: esp-part
-        type: partition
-        match: { path: /dev/nvme0n1p1 }
-        preserve: true
-        grub_device: true
-      - id: esp-fs
-        type: format
-        volume: esp-part
-        fstype: fat32
-        preserve: true
-      - id: esp-mount
-        type: mount
-        device: esp-fs
-        path: /boot/efi
+    - id: rootfs_mount
+      type: mount
+      device: rootfs_format
+      path: /
+      # optional: btrfs mount opts; you can trim this if you prefer defaults
+      options: [ "defaults", "ssd", "noatime", "compress=zstd:3" ]
 
-      - id: macos-part
-        type: partition
-        match: { path: /dev/nvme0n1p2 }
-        preserve: true
+    # --- /boot/efi (keep p1) ---
+    - id: efi_format
+      type: format
+      volume: /dev/nvme0n1p1
+      fstype: fat32
+      preserve: true      # keep existing ESP content (recommended)
 
-      - id: swap-part
-        type: partition
-        match: { path: /dev/nvme0n1p3 }
-        preserve: true
-      - id: swap-fs
-        type: format
-        volume: swap-part
-        fstype: swap
-        preserve: true
-      - id: swap-mount
-        type: mount
-        device: swap-fs
-        path: none
+    - id: efi_mount
+      type: mount
+      device: efi_format
+      path: /boot/efi
 
-      - id: root-part
-        type: partition
-        match: { path: /dev/nvme0n1p4 }
-        preserve: true
-      - id: root-fs
-        type: format
-        volume: root-part
-        fstype: btrfs
-        label: ubuntu-root
-      - id: root-mount
-        type: mount
-        device: root-fs
-        path: /
+    # --- swap (keep p3) ---
+    - id: swap_format
+      type: format
+      volume: /dev/nvme0n1p3
+      fstype: swap
+      preserve: true
 
-  interactive-sections: []
+    - id: swap_mount
+      type: mount
+      device: swap_format
+      path: none
 
   late-commands:
     - curtin in-target -- bash -euxc 'printf "KVER=\\"%s\\"\\n" "" > /etc/default/mbp-mainline'
