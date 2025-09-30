@@ -99,15 +99,17 @@ autoinstall:
     package_upgrade: true
 
   late-commands:
-    - curtin in-target -- apt-get update
-    - curtin in-target -- apt-get dist-upgrade -y
-    
-  # --- Broadcom 43602 Apple board/NVRAM file (from your repo)
-    - curtin in-target -- mkdir -p /lib/firmware/brcm
-    - curtin in-target -- /bin/sh -c 'curl -fsSL https://raw.githubusercontent.com/HezhaKh/mbp14-3/refs/heads/main/brcmfmac43602-pcie.txt \
-        -o /lib/firmware/brcm/brcmfmac43602-pcie.txt'
-    - curtin in-target -- chown root:root /lib/firmware/brcm/brcmfmac43602-pcie.txt
-    - curtin in-target -- chmod 0644 /lib/firmware/brcm/brcmfmac43602-pcie.txt
-    # helper symlink for kernels that look for the Apple-model filename
-    - curtin in-target -- /bin/sh -c 'ln -sfn "brcmfmac43602-pcie.txt" "/lib/firmware/brcm/brcmfmac43602-pcie.Apple Inc.-MacBookPro14,3.txt"'
-    
+    - curtin in-target -- bash -euxo pipefail -c '
+        set -u
+        mkdir -p /lib/firmware/brcm
+        URL="https://raw.githubusercontent.com/HezhaKh/mbp14-3/main/brcmfmac43602-pcie.txt"
+        APPLE="/lib/firmware/brcm/brcmfmac43602-pcie.Apple Inc.-MacBookPro14,3.txt"
+        GENERIC="/lib/firmware/brcm/brcmfmac43602-pcie.txt"
+        # fetch with curl, fall back to wget; be strict (-f) and retry
+        if ! curl -fsSL --retry 5 --retry-delay 1 "$URL" -o "$APPLE"; then
+          wget -O "$APPLE" "$URL"
+        fi
+        # point the generic name at the Apple file
+        ln -sf "$(basename "$APPLE")" "$GENERIC"
+        # rebuild initramfs so the firmware is present on first boot
+        update-initramfs -u'
