@@ -2,9 +2,9 @@
 autoinstall:
   version: 1
   identity:
-    hostname: ubuntu-mbp
+    hostname: mbp14-3
     username: hkh
-    password: "$6$rounds=4096$changeme$replace_this_with_encrypted_hash"
+    password: ""
   locale: en_US.UTF-8
   keyboard:
     layout: us
@@ -15,9 +15,7 @@ autoinstall:
       - arches: [amd64]
         uri: http://archive.ubuntu.com/ubuntu
   ssh:
-    install-server: true
-    authorized-keys: []
-    allow-pw: true
+    install-server: false
 
   storage:
     layout:
@@ -93,24 +91,11 @@ autoinstall:
     - pipewire-audio
     - pipewire-pulse
     - wireplumber
+    - iw
+    - mbfan
+    - bolt
+    - pulseaudio-utils
 
   user-data:
-    disable_root: false
+    disable_root: true
     package_upgrade: true
-
-  late-commands:
-    - curtin in-target -- bash -euxo pipefail -c '
-        set -u
-        mkdir -p /lib/firmware/brcm
-        URL="https://raw.githubusercontent.com/HezhaKh/mbp14-3/main/brcmfmac43602-pcie.txt"
-        APPLE="/lib/firmware/brcm/brcmfmac43602-pcie.Apple Inc.-MacBookPro14,3.txt"
-        GENERIC="/lib/firmware/brcm/brcmfmac43602-pcie.txt"
-        # fetch with curl, fall back to wget; be strict (-f) and retry
-        if ! curl -fsSL --retry 5 --retry-delay 1 "$URL" -o "$APPLE"; then
-          wget -O "$APPLE" "$URL"
-        fi
-        # point the generic name at the Apple file
-        ln -sf "$(basename "$APPLE")" "$GENERIC"
-        # rebuild initramfs so the firmware is present on first boot
-        update-initramfs -u
-        '
