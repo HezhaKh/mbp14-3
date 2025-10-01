@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# mbp14-3-touchbar-fix.sh
+# touchbar-fix.sh
 # MacBookPro14,3 (2017) – Ubuntu 22.04 GA kernel 5.15.0-*
 # Uses RoadRunner2 macbook12-spi-driver (Touch Bar: apple_ibridge + apple_ib_tb)
 # and the rebind workaround discussed in issue #42.
