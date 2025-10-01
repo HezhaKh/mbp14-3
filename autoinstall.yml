@@ -9,7 +9,7 @@ autoinstall:
   keyboard:
     layout: us
     variant: ''
-  timezone: UTC
+  timezone: America/New_York
   apt:
     primary:
       - arches: [amd64]
