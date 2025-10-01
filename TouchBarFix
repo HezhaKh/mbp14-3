@@ -1,0 +1,192 @@
+#!/usr/bin/env bash
+# mbp14-3-touchbar-fix.sh
+# MacBookPro14,3 (2017) – Ubuntu 22.04 GA kernel 5.15.0-*
+# Uses RoadRunner2 macbook12-spi-driver (Touch Bar: apple_ibridge + apple_ib_tb)
+# and the rebind workaround discussed in issue #42.
+#
+# What it does:
+# - Builds ONLY apple_ibridge + apple_ib_tb for the RUNNING kernel.
+# - Installs them into /lib/modules/$(uname -r)/extra and depmods.
+# - Ensures iBridge/TB load before applespi (softdep + initramfs entries).
+# - Installs a systemd oneshot that auto-detects the iBridge (05ac:8600)
+#   USB device path and unbinds/rebinds it after boot.
+# - Adds a kernel postinst hook to rebuild modules after 5.15 point updates.
+#
+# Run with: sudo ./mbp14-3-touchbar-fix.sh
+# Re-run anytime (idempotent). Requires Secure Boot OFF or a permissive MOK.
+
+set -euo pipefail
+
+# ---- sanity ---------------------------------------------------------------
+if [[ $EUID -ne 0 ]]; then
+  echo "Please run as root (use sudo)." >&2
+  exit 1
+fi
+
+KVER="$(uname -r)"
+if [[ ! "$KVER" =~ ^5\.15\.0-.*-generic$ ]]; then
+  echo "Warning: running kernel is '$KVER' (expected 5.15.0-*-generic). Continuing anyway..." >&2
+fi
+
+# ---- packages -------------------------------------------------------------
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -y
+apt-get install -y --no-install-recommends \
+  build-essential git linux-headers-"$KVER" ca-certificates
+
+# ---- directories & sources -----------------------------------------------
+SRCROOT="/usr/local/src/mbp14-3-tb"
+REPO_DIR="$SRCROOT/macbook12-spi-driver"
+BUILD_DIR="$SRCROOT/build-$KVER"
+
+mkdir -p "$SRCROOT"
+if [[ -d "$REPO_DIR/.git" ]]; then
+  git -C "$REPO_DIR" fetch --depth=1 origin
+else
+  git clone --depth=1 https://github.com/HezhaKh/macbook12-spi-driver.git "$REPO_DIR"
+fi
+# Use the branch referenced by the gist for Touch Bar HID
+git -C "$REPO_DIR" checkout -q touchbar-driver-hid-driver
+
+rm -rf "$BUILD_DIR"
+mkdir -p "$BUILD_DIR"
+cp "$REPO_DIR"/apple-ibridge.* "$BUILD_DIR"/
+cp "$REPO_DIR"/apple-ib-tb.c "$BUILD_DIR"/
+
+# ---- minimal Kbuild (only 2 modules) -------------------------------------
+cat > "$BUILD_DIR/Makefile" <<'EOF'
+obj-m += apple-ibridge.o
+obj-m += apple-ib-tb.o
+all:
+	$(MAKE) -C /lib/modules/$(shell uname -r)/build M=$(PWD) modules
+clean:
+	$(MAKE) -C /lib/modules/$(shell uname -r)/build M=$(PWD) clean
+EOF
+
+# ---- build + install ------------------------------------------------------
+make -C /lib/modules/"$KVER"/build M="$BUILD_DIR" -j"$(nproc)" modules
+install -D -m 0644 "$BUILD_DIR/apple-ibridge.ko" /lib/modules/"$KVER"/extra/apple-ibridge.ko
+install -D -m 0644 "$BUILD_DIR/apple-ib-tb.ko"  /lib/modules/"$KVER"/extra/apple-ib-tb.ko
+depmod -a "$KVER"
+
+# ---- load now (non-fatal if already loaded) ------------------------------
+modprobe apple_ibridge 2>/dev/null || true
+modprobe apple_ib_tb 2>/dev/null || true
+modprobe applespi 2>/dev/null || true
+
+# ---- enforce load order + initramfs --------------------------------------
+# applespi should come AFTER iBridge/TB
+MODCONF="/etc/modprobe.d/mbp14-3-applespi.conf"
+grep -qxF "softdep applespi pre: apple_ibridge apple_ib_tb" "$MODCONF" 2>/dev/null \
+  || echo "softdep applespi pre: apple_ibridge apple_ib_tb" >> "$MODCONF"
+
+# ensure early-boot presence (dedupe)
+INITM="/etc/initramfs-tools/modules"
+touch "$INITM"
+for m in apple_ibridge apple_ib_tb applespi; do
+  grep -qxF "$m" "$INITM" || echo "$m" >> "$INITM"
+done
+update-initramfs -u -k "$KVER"
+
+# ---- auto-rebind helper (auto-detect bus path by VID:PID 05ac:8600) ------
+cat > /usr/local/sbin/rebind-ibridge.sh <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+find_bus() {
+  # Look for Apple iBridge (VID:PID 05ac:8600) under /sys/bus/usb/devices
+  for dev in /sys/bus/usb/devices/*; do
+    [[ -f "$dev/idVendor" && -f "$dev/idProduct" ]] || continue
+    if [[ "$(cat "$dev/idVendor")" == "05ac" && "$(cat "$dev/idProduct")" == "8600" ]]; then
+      basename "$dev"; return 0
+    fi
+  done
+  return 1
+}
+BUS="$(find_bus || true)"
+if [[ -z "${BUS:-}" ]]; then
+  echo "iBridge (05ac:8600) not found; nothing to rebind." >&2
+  exit 0
+fi
+# Rebind sequence
+echo "$BUS" > /sys/bus/usb/drivers/usb/unbind || true
+sleep 1
+echo "$BUS" > /sys/bus/usb/drivers/usb/bind || true
+EOF
+chmod +x /usr/local/sbin/rebind-ibridge.sh
+
+# ---- systemd service to rebind at boot -----------------------------------
+cat > /etc/systemd/system/touchbar-rebind.service <<'EOF'
+[Unit]
+Description=Rebind Apple iBridge (Touch Bar) after boot
+Wants=systemd-udev-settle.service
+After=systemd-udev-settle.service
+After=graphical.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/rebind-ibridge.sh
+
+[Install]
+WantedBy=graphical.target
+EOF
+
+systemctl daemon-reload
+systemctl enable --now touchbar-rebind.service
+
+# ---- kernel postinst hook to rebuild after updates ------------------------
+cat > /usr/local/sbin/rebuild-apple-tb.sh <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+KVER="${1:-$(uname -r)}"
+SRCROOT="/usr/local/src/mbp14-3-tb"
+REPO_DIR="$SRCROOT/macbook12-spi-driver"
+BUILD_DIR="$SRCROOT/build-$KVER"
+
+# Ensure headers present for target kernel; if not, bail cleanly
+if [[ ! -d "/lib/modules/$KVER/build" ]]; then
+  echo "Headers for $KVER not installed; skipping TB rebuild." >&2
+  exit 0
+fi
+
+mkdir -p "$BUILD_DIR"
+cp "$REPO_DIR"/apple-ibridge.* "$BUILD_DIR"/
+cp "$REPO_DIR"/apple-ib-tb.c "$BUILD_DIR"/
+
+cat > "$BUILD_DIR/Makefile" <<'MK'
+obj-m += apple-ibridge.o
+obj-m += apple-ib-tb.o
+all:
+	$(MAKE) -C /lib/modules/$(shell uname -r)/build M=$(PWD) modules
+clean:
+	$(MAKE) -C /lib/modules/$(shell uname -r)/build M=$(PWD) clean
+MK
+
+make -C /lib/modules/"$KVER"/build M="$BUILD_DIR" -j"$(nproc)" modules
+install -D -m 0644 "$BUILD_DIR/apple-ibridge.ko" /lib/modules/"$KVER"/extra/apple-ibridge.ko
+install -D -m 0644 "$BUILD_DIR/apple-ib-tb.ko"  /lib/modules/"$KVER"/extra/apple-ib-tb.ko
+depmod -a "$KVER"
+EOF
+chmod +x /usr/local/sbin/rebuild-apple-tb.sh
+
+cat > /etc/kernel/postinst.d/z99-mbp14-3-touchbar <<'EOF'
+#!/bin/sh
+# Called as: postinst <version> <bootloader>
+VER="$1"
+if [ -x /usr/local/sbin/rebuild-apple-tb.sh ]; then
+  /usr/local/sbin/rebuild-apple-tb.sh "$VER" || true
+fi
+exit 0
+EOF
+chmod +x /etc/kernel/postinst.d/z99-mbp14-3-touchbar
+
+# ---- final info -----------------------------------------------------------
+echo
+echo "✅ Touch Bar fix installed for kernel ${KVER}."
+echo "   - Modules: apple_ibridge + apple_ib_tb (in /lib/modules/${KVER}/extra)"
+echo "   - Load order set: iBridge/TB before applespi"
+echo "   - Initramfs updated"
+echo "   - Auto-rebind service: touchbar-rebind.service (auto-detects iBridge)"
+echo "   - Postinst hook will rebuild these modules after 5.15 point updates"
+echo
+echo "If Touch Bar is ever dark after a cold boot, this will rebind it automatically."
+echo "Manual rebind anytime: sudo /usr/local/sbin/rebind-ibridge.sh"
