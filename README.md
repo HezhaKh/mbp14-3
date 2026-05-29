@@ -63,9 +63,17 @@ sudo ./install-all.sh --only-audio         # just the audio driver
   internal panel (so it can't be powered off) and its `auto` DPM pins the core clock at maximum
   (855 MHz) even at idle — ~10 W. This script forces the GPU to **low clocks on battery / full on
   AC**, installs and configures **TLP** (PCIe ASPM, runtime PM, USB autosuspend with the Touch Bar
-  iBridge denylisted; replaces `power-profiles-daemon`), and tunes **mbpfan** to ramp earlier.
-  Measured effect: idle draw ~24 W → **~18.5 W** on battery, and noticeably cooler.
-  Tunable via env vars (`GPU_BAT_LEVEL`, `FAN_LOW/HIGH/MAX`, `INSTALL_TLP`).
+  iBridge denylisted; replaces `power-profiles-daemon`), tunes **mbpfan** to ramp earlier, and
+  **caps the CPU sustained power (RAPL PL1) to 30 W**. The firmware leaves PL1 at 100 W, so the
+  i7-7700HQ runs flat-out into Tjmax (100 °C) under all-core load; the cap holds it at ~88 °C and
+  ~12 W less while costing ~14% sustained multicore throughput (idle/interactive use is unchanged).
+  Measured effect: idle draw ~24 W → **~18.5 W** on battery; load CPU 42 W → 30 W, 99 °C → 88 °C.
+  Tunable via env vars (`GPU_BAT_LEVEL`, `FAN_LOW/HIGH/MAX`, `INSTALL_TLP`, `CPU_PL1_WATTS`;
+  set `CPU_PL1_WATTS=0` to keep full CPU performance).
+
+  > **Note:** CPU *undervolting* (the usual heat fix) is **locked** on this chip by the
+  > Plundervolt microcode mitigation (rev `0xf8`) — writes to MSR 0x150 are silently ignored —
+  > so the RAPL power cap is used instead.
 
 ## After a kernel update (within 5.15.x)
 
