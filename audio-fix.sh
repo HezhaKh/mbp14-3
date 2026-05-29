@@ -45,33 +45,56 @@ else
   sudo git clone "$REPO_URL" "$REPO_DIR"
 fi
 
-log "D) Build & install the driver via the upstream installer…"
+log "D) Build & install the patched driver via DKMS (auto-rebuilds on kernel updates)…"
 cd "$REPO_DIR"
-# The script installs into /lib/modules/$(uname -r)/updates and runs depmod.
-sudo ./install.cirrus.driver.sh
+# dkms.sh patches the in-tree cs8409 source (PRE_BUILD), builds, and installs into
+# /lib/modules/$(uname -r)/updates/dkms, then depmods. Preferred over running
+# install.cirrus.driver.sh directly because DKMS rebuilds automatically after kernel
+# point updates and cleanly restores the stock module on removal.
+sudo bash dkms.sh
 
-log "E) Load the module now (also happens automatically after a reboot)…"
-# Reload in case an older attempt is in memory.
+log "E) Assert the PATCHED module is the one modprobe will load…"
+# This is the check that matters: if the loader still resolves to the in-tree
+# .../kernel/... module, the patch did NOT take and audio will stay on Dummy Output.
+RESOLVED="$(modinfo -n snd_hda_codec_cs8409 2>/dev/null || true)"
+log "   resolved module: ${RESOLVED:-<none>}"
+case "$RESOLVED" in
+  */updates/*)
+    log "   OK: patched module is in place." ;;
+  *)
+    cat >&2 <<EOF
+
+ERROR: snd_hda_codec_cs8409 still resolves to the STOCK in-tree module:
+  ${RESOLVED:-<none>}
+The DKMS install did not take. Check:
+  - 'dkms status | grep snd_hda_macbookpro' should show 'installed'
+  - build log under /var/lib/dkms/snd_hda_macbookpro/0.1/\$(uname -r)/\$ARCH/log/
+Re-run this script after resolving the build error.
+EOF
+    exit 1 ;;
+esac
+dkms status | grep -i snd_hda_macbookpro || true
+
+log "F) Try to load the patched module now (a reboot is the reliable activation path)…"
+# Live swap usually fails with 'Module ... is in use' because card 0's codec is bound
+# to the running sound stack. That is expected — the patched module loads on next boot.
 sudo modprobe -r snd_hda_codec_cs8409 2>/dev/null || true
-sudo modprobe snd_hda_codec_cs8409 || true
+sudo modprobe snd_hda_codec_cs8409 2>/dev/null || true
 
-log "F) Quick sanity checks…"
-grep -R "Codec:" /proc/asound/card*/codec* 2>/dev/null || true
+log "G) Quick sanity checks…"
+cat /proc/asound/cards 2>/dev/null || true
 lsmod | grep -E 'cs8409|hda_codec' || true
-if ! aplay -l >/dev/null 2>&1; then
-  log "ALSA reports no cards yet; nudging ALSA once…"
-  sudo alsa force-reload || true
-  sleep 2
-fi
 aplay -l || true
-pactl list short sinks || true
+pactl list short sinks 2>/dev/null || true
 
 cat <<'EOF'
 
-Next steps (if needed):
-  1) Open Settings > Sound and choose "Analog Stereo Output".
-  2) If you still see "Dummy Output", reboot once and re-check.
+Next steps:
+  1) REBOOT — the patched codec cannot hot-swap while audio is in use, so the
+     analog sink only enumerates after a fresh boot.
+  2) After reboot, open Settings > Sound and choose "Analog Stereo Output".
 
 Tip:
-  After kernel updates within 5.15.x, re-run this script to rebuild if audio disappears.
+  DKMS rebuilds this automatically on 5.15.x kernel updates. If audio ever
+  disappears after an update, re-run this script.
 EOF
