@@ -12,6 +12,7 @@ running **Ubuntu 22.04 LTS** on the GA kernel (**5.15.x**).
 | Audio (Cirrus CS8409) | ✅ working *(after reboot)* | `audio-fix.sh` |
 | Touch Bar (iBridge/T1) | ✅ working | `touchbar-fix.sh` |
 | GPU (amdgpu) | ✅ works out of the box | — |
+| Heat & battery drain | ✅ reduced (~5 W idle) | `power-cooling-fix.sh` |
 | Webcam (FaceTime HD) | ⚠️ not covered | — |
 
 ## Prerequisites
@@ -28,7 +29,7 @@ running **Ubuntu 22.04 LTS** on the GA kernel (**5.15.x**).
 ```bash
 git clone https://github.com/HezhaKh/mbp14-3.git
 cd mbp14-3
-sudo ./install-all.sh        # runs wifi → bluetooth → audio → touchbar
+sudo ./install-all.sh        # runs wifi → bluetooth → audio → touchbar → power
 sudo reboot                  # required to activate the patched audio codec
 ```
 
@@ -58,6 +59,13 @@ sudo ./install-all.sh --only-audio         # just the audio driver
   branch), sets the `applespi` load order, updates initramfs, installs a boot-time rebind service
   for the iBridge (`05ac:8600`), and adds a kernel `postinst` hook so the modules rebuild after
   5.15.x point updates.
+- **`power-cooling-fix.sh`** — reduces heat and battery drain. The discrete AMD GPU drives the
+  internal panel (so it can't be powered off) and its `auto` DPM pins the core clock at maximum
+  (855 MHz) even at idle — ~10 W. This script forces the GPU to **low clocks on battery / full on
+  AC**, installs and configures **TLP** (PCIe ASPM, runtime PM, USB autosuspend with the Touch Bar
+  iBridge denylisted; replaces `power-profiles-daemon`), and tunes **mbpfan** to ramp earlier.
+  Measured effect: idle draw ~24 W → **~18.5 W** on battery, and noticeably cooler.
+  Tunable via env vars (`GPU_BAT_LEVEL`, `FAN_LOW/HIGH/MAX`, `INSTALL_TLP`).
 
 ## After a kernel update (within 5.15.x)
 

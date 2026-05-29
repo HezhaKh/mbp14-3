@@ -9,7 +9,7 @@
 #   sudo ./install-all.sh --skip-wifi     # skip one or more steps
 #   sudo ./install-all.sh --only-audio    # run a single step
 #
-# Steps (in order): wifi, bluetooth, audio, touchbar
+# Steps (in order): wifi, bluetooth, audio, touchbar, power
 #
 # Prerequisite: Secure Boot must be OFF (the audio + Touch Bar modules are out-of-tree).
 
@@ -24,12 +24,13 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 
 # Order matters: wifi first (network for the others), then the cheap BT fix, then the
 # heavier driver builds.
-ALL_STEPS=(wifi bluetooth audio touchbar)
+ALL_STEPS=(wifi bluetooth audio touchbar power)
 declare -A SCRIPT=(
   [wifi]="bcm43602-setup.sh"
   [bluetooth]="bluetooth-fix.sh"
   [audio]="audio-fix.sh"
   [touchbar]="touchbar-fix.sh"
+  [power]="power-cooling-fix.sh"
 )
 
 # --- arg parsing: --skip-X (repeatable) or --only-X (repeatable) ---
