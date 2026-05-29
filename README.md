@@ -13,6 +13,7 @@ running **Ubuntu 22.04 LTS** on the GA kernel (**5.15.x**).
 | Touch Bar (iBridge/T1) | ✅ working | `touchbar-fix.sh` |
 | GPU (amdgpu) | ✅ works out of the box | — |
 | Heat & battery drain | ✅ reduced (~5 W idle) | `power-cooling-fix.sh` |
+| Dual-boot (Ubuntu / macOS) | ✅ rEFInd picker + `jellyskull` theme | `refind-theme.sh` |
 | Webcam (FaceTime HD) | ⚠️ not covered | — |
 
 ## Prerequisites
@@ -74,6 +75,19 @@ sudo ./install-all.sh --only-audio         # just the audio driver
   > **Note:** CPU *undervolting* (the usual heat fix) is **locked** on this chip by the
   > Plundervolt microcode mitigation (rev `0xf8`) — writes to MSR 0x150 are silently ignored —
   > so the RAPL power cap is used instead.
+
+- **`refind-theme.sh`** — sets up a clean **dual-boot picker** for Ubuntu + macOS using the
+  **rEFInd** boot manager. GRUB can't show macOS on this Mac (neither GRUB nor `os-prober` can read
+  the APFS volume), so rEFInd is used as the menu: it **chainloads Ubuntu's existing shim→GRUB** and
+  boots **macOS** directly. Installs rEFInd, deploys the **`jellyskull`** theme (`refind/jellyskull/`:
+  dark graphite `#2a2c30` background, monochrome **white solid** icons — a jellyfish for Ubuntu 22.04
+  *"Jammy Jellyfish"*, the Apple logo for macOS — with an **Apple-style border-light glow** on the
+  selected entry), writes a tidy `refind.conf` with **one explicit `macOS` entry** (volume-group GUID
+  **auto-detected** from NVRAM; override via `MACOS_VG_GUID=`), and makes rEFInd the default EFI boot
+  entry. Idempotent; backs up any existing config to `refind.conf.dist`. **Run it separately from
+  `install-all.sh`** — it changes the boot manager. Fallback if macOS ever won't boot: hold **⌥**
+  (Option) at the chime for Apple's Startup Manager. Tunables: `TIMEOUT`, `MACOS_VG_GUID`,
+  `INSTALL_REFIND`.
 
 ## After a kernel update (within 5.15.x)
 
